@@ -74,6 +74,9 @@ export class AgentSession{
     estimateContext(options:LoopOptions){
         return this.loop.estimateContext(this._state.messages,options,this.contextUsage,this.checkpoint);
     }
+    invalidateContextUsage():void{
+        this.contextUsage.lastUsage=undefined;
+    }
 
     abort():void{
         return this.activeRun?.abortController.abort();
@@ -142,6 +145,10 @@ export class AgentSession{
                 if(event.event.type==="done"){
                     await this.recordUsage(event.modelCallId,event.event.response.usage);
                 }
+                break;
+            }
+            case "model_usage":{
+                await this.recordUsage(event.modelCallId,event.usage);
                 break;
             }
             case "compaction_usage":{

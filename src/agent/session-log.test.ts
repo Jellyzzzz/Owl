@@ -6,7 +6,7 @@ import {join} from "node:path";
 import type {Message,Request} from "../model/types.js";
 import {buildModelContext,type CompactionRecord} from "./compaction.js";
 import {estimateMessageTokens,measureContext} from "./context-budget.js";
-import {appendSessionEntry,appendSessionMessage,loadSessionLog,restoreContextUsageAnchor} from "./session-log.js";
+import {appendSessionEntry,appendSessionMessage,appendSessionUsage,loadSessionLog,restoreContextUsageAnchor} from "./session-log.js";
 
 const request:Request={
     modelCallId:"next",model:{providerId:"deepseek",modelId:"model"},
@@ -79,4 +79,22 @@ test("session log accepts legacy and split tool output but rejects malformed too
     const invalid={type:"message",message:{role:"tool",timestamp:1,content:[{type:"text",text:"missing metadata"}]}};
     await writeFile(path,JSON.stringify(invalid)+"\n");
     await assert.rejects(loadSessionLog(path,true),/Invalid session record/);
+}));
+
+test("resume rebuilds usage details once per call, including compaction and unknown usage",async()=>withLog(async path=>{
+    const normal={inputTokens:40,outputTokens:20,totalTokens:120,cachedReadTokens:60,cachedWriteTokens:0,reasoningTokens:10};
+    const summary={inputTokens:10,outputTokens:5,totalTokens:15,cachedReadTokens:0,cachedWriteTokens:0,reasoningTokens:0};
+    await appendSessionUsage(path,"normal",normal);
+    await appendSessionUsage(path,"normal",normal);
+    await appendSessionUsage(path,"summary",summary,"compaction");
+    await appendSessionUsage(path,"cancelled",null);
+    const totals=(await loadSessionLog(path,true)).usageTotals;
+    assert.equal(totals.responses,3);
+    assert.equal(totals.uncachedTokens,50);
+    assert.equal(totals.cachedReadTokens,60);
+    assert.equal(totals.inputTokens,110);
+    assert.equal(totals.outputTokens,25);
+    assert.equal(totals.reportedTokens,135);
+    assert.equal(totals.missingTotals,1);
+    assert.equal(totals.cacheRatioResponses,2);
 }));

@@ -2,14 +2,17 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {stripVTControlCharacters} from "node:util";
 import {StatusBar} from "./transcript.js";
+import {createUsageTotals} from "../agent/usage.js";
 
 test("status bar shows estimated context, current run and total usage",()=>{
     const status=new StatusBar(()=>({
-        model:"deepseek-flash",contextTokens:26700,contextWindow:1000000,
-        runUsage:{reportedTokens:3200,responses:2,missingTotals:0},
-        sessionUsage:{reportedTokens:85900,responses:7,missingTotals:1},busy:false,queued:0,
+        model:"deepseek-flash",reasoningLevel:"high",toolMode:"sequential",contextTokens:26700,contextWindow:1000000,
+        runUsage:{...createUsageTotals(),reportedTokens:3200,responses:2,missingTotals:0},
+        sessionUsage:{...createUsageTotals(),reportedTokens:85900,responses:7,missingTotals:1},busy:false,queued:0,
     }));
     const wide=stripVTControlCharacters(status.render(100)[0]);
+    assert.match(wide,/high/);
+    assert.match(wide,/sequential/);
     assert.match(wide,/ctx≈26\.7k\/1\.0M/);
     assert.match(wide,/本轮 \+3\.2k/);
     assert.match(wide,/会话累计 85\.9k\?/);

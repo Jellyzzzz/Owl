@@ -9,6 +9,7 @@ import {spawnSync} from "node:child_process";
 import {fileURLToPath} from "node:url";
 
 const launcher=fileURLToPath(new URL("../bin/owl",import.meta.url));
+const cli=fileURLToPath(new URL("./cli.ts",import.meta.url));
 
 test("launcher resolves symlinks without changing cwd or splitting arguments",async()=>{
     const dir=await mkdtemp(join(tmpdir(),"owl launcher "));
@@ -96,4 +97,68 @@ test("real launcher loads user config and resumes a session for the caller's wor
     }finally{
         await rm(dir,{recursive:true,force:true});
     }
+});
+
+test("usage command reads a restored session in one-shot and text modes without a model call",async()=>{
+    const dir=await mkdtemp(join(tmpdir(),"owl-usage-cli-"));
+    try{
+        const session=join(dir,"session.jsonl");
+        await writeFile(session,JSON.stringify({
+            type:"usage",modelCallId:"call-1",usage:{
+                inputTokens:40,cachedReadTokens:60,cachedWriteTokens:0,
+                outputTokens:20,totalTokens:120,reasoningTokens:10,
+            },
+        })+"\n");
+        const env={...process.env,DEEPSEEK_API_KEY:"stub",DEEPSEEK_MODEL:"deepseek-flash",DEEPSEEK_THINKING_MODE:"enabled"};
+        const args=["--import","tsx",cli,"--no-tui","--session",session];
+        for(const extra of [["/usage"],[]]){
+            const result=spawnSync(process.execPath,[...args,...extra],{
+                cwd:dirname(dirname(launcher)),env,input:extra.length?undefined:"/usage\n/exit\n",encoding:"utf8",timeout:10000,
+            });
+            assert.equal(result.status,0,result.stderr);
+            assert.match(result.stdout,/缓存命中：60 tokens（60\.0%）/);
+            assert.match(result.stdout,/累计输出：20 tokens/);
+            assert.match(result.stdout,/累计总量：120 tokens/);
+        }
+        const invalid=spawnSync(process.execPath,[...args,"/usage detail"],{
+            cwd:dirname(dirname(launcher)),env,encoding:"utf8",timeout:10000,
+        });
+        assert.equal(invalid.status,1);
+        assert.match(invalid.stderr,/不接受参数/);
+    }finally{
+        await rm(dir,{recursive:true,force:true});
+    }
+});
+
+test("text settings and startup flags configure the current process without a model call",()=>{
+    const env={...process.env,DEEPSEEK_API_KEY:"stub",DEEPSEEK_MODEL:"deepseek-flash",DEEPSEEK_THINKING_MODE:"enabled"};
+    const args=["--import","tsx",cli,"--no-tui"];
+    const text=spawnSync(process.execPath,args,{
+        cwd:dirname(dirname(launcher)),env,encoding:"utf8",timeout:10000,
+        input:"/reasoning low\n/max-output 16384\n/max-calls 200\n/concurrency 2\n/parallel\n/settings\n/sequential\n/exit\n",
+    });
+    assert.equal(text.status,0,text.stderr);
+    assert.match(text.stdout,/推理等级：low/);
+    assert.match(text.stdout,/单次输出上限：16,384 tokens/);
+    assert.match(text.stdout,/每次任务模型调用上限：200/);
+    assert.match(text.stdout,/工具执行：parallel/);
+    assert.match(text.stdout,/工具并发上限：2/);
+    assert.match(text.stdout,/tool-mode = sequential/);
+
+    const flags=spawnSync(process.execPath,[...args,"--reasoning","max","--max-output-tokens","65536",
+        "--max-model-calls","300","--max-concurrent-tools","3","--parallel-tools","/settings"],{
+        cwd:dirname(dirname(launcher)),env,encoding:"utf8",timeout:10000,
+    });
+    assert.equal(flags.status,0,flags.stderr);
+    assert.match(flags.stdout,/推理等级：max/);
+    assert.match(flags.stdout,/单次输出上限：65,536 tokens/);
+    assert.match(flags.stdout,/上下文预留：65,536 tokens/);
+    assert.match(flags.stdout,/每次任务模型调用上限：300/);
+    assert.match(flags.stdout,/工具执行：parallel/);
+
+    const invalid=spawnSync(process.execPath,[...args,"--reasoning","medium","/settings"],{
+        cwd:dirname(dirname(launcher)),env,encoding:"utf8",timeout:10000,
+    });
+    assert.equal(invalid.status,1);
+    assert.match(invalid.stderr,/不支持推理等级/);
 });

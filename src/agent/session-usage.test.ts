@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import type {ModelGateway} from "../model/gateway.js";
+import {ModelRequestError,type ModelGateway} from "../model/gateway.js";
 import type {ContentBlock,Response} from "../model/types.js";
 import {ToolRegistry} from "../tools/registry.js";
 import {AgentLoop} from "./loop.js";
@@ -56,4 +56,36 @@ test("session updates context after tool messages and tracks run and cumulative 
     assert.equal((await session.prompt("again",options)).stopReason,"stop");
     assert.equal(session.runUsage.reportedTokens,50);
     assert.equal(session.sessionUsage.reportedTokens,350);
+    assert.equal(session.estimateContext(options).estimatedInputTokens,50);
+    session.invalidateContextUsage();
+    assert.notEqual(session.estimateContext(options).estimatedInputTokens,50);
+});
+
+test("cancelled model requests persist known or unknown usage exactly once",async()=>{
+    for(const usage of [response("STOP",[],100).usage,null]){
+        let started!:()=>void;
+        const waiting=new Promise<void>(resolve=>{started=resolve;});
+        const model:ModelGateway={
+            async complete(){throw new Error("Unexpected compaction");},
+            async *stream(_request,signal){
+                started();
+                await new Promise<void>((_resolve,reject)=>{
+                    signal.addEventListener("abort",()=>reject(new ModelRequestError(signal.reason,usage)),{once:true});
+                });
+            },
+        };
+        const saved:Array<{id:string;value:typeof usage}>=[];
+        const session=new AgentSession(new AgentLoop(model,new ToolRegistry()),[],undefined,{
+            persist:async(id,value)=>{saved.push({id,value});},
+        });
+        const pending=session.prompt("hello",options);
+        await waiting;
+        session.abort();
+        assert.equal((await pending).stopReason,"cancelled");
+        assert.equal(saved.length,1);
+        assert.deepEqual(saved[0].value,usage);
+        assert.equal(session.sessionUsage.responses,1);
+        assert.equal(session.sessionUsage.reportedTokens,usage?.totalTokens??0);
+        assert.equal(session.sessionUsage.missingTotals,usage===null?1:0);
+    }
 });

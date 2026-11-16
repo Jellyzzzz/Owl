@@ -254,6 +254,8 @@ export class ToolView implements Component {
 
 export interface StatusState {
     readonly model: string;
+    readonly reasoningLevel: string;
+    readonly toolMode: string;
     readonly contextTokens: number | null;
     readonly contextWindow: number;
     readonly runUsage: import("../agent/usage.js").UsageTotals;
@@ -270,7 +272,7 @@ export class StatusBar implements Component {
         const state = this.read();
 
         const dot = state.busy ? owl.warning("◍") : owl.accent("●");
-        let left = `${dot} ${owl.accentBold("owl")} ${owl.dim("·")} ${owl.muted(state.model)}${
+        let left = `${dot} ${owl.accentBold("owl")} ${owl.dim("·")} ${owl.muted(state.model)} ${owl.dim("·")} ${owl.muted(state.reasoningLevel)} ${owl.dim("·")} ${owl.muted(state.toolMode)}${
             state.queued > 0 ? ` ${owl.warning(`+${state.queued} queued`)}` : ""
         }`;
 

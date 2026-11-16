@@ -33,7 +33,11 @@ cd /path/to/project
 owl
 ```
 
-启动器保留当前工作目录，并在用户配置不存在时回退到 Owl 仓库的 `.env.local`。会话保存在 `~/.owl/sessions/`，可通过 `/resume` 恢复；`/compact` 用于手动压缩上下文。Bash 命令以启动 Owl 的用户权限执行。
+启动器保留当前工作目录，并在用户配置不存在时回退到 Owl 仓库的 `.env.local`。会话保存在 `~/.owl/sessions/`，可通过 `/resume` 恢复；`/compact` 用于手动压缩上下文，`/usage` 显示当前会话的累计输入、缓存命中和输出。Bash 命令以启动 Owl 的用户权限执行。
+
+在 TUI 中输入 `/settings` 可以选择推理等级、单次输出上限、每次任务的模型调用上限、工具执行模式和并发数；也可以使用 `/reasoning`、`/max-output`、`/max-calls` 或 `/concurrency` 直接选择。`/parallel` 和 `/sequential` 直接切换执行模式。文本模式可使用例如 `/reasoning low`、`/max-output 32768`；设置只影响后续任务。
+
+默认单次输出上限为 32,768 tokens（不超过模型限制），每次任务最多 100 次模型调用，工具顺序执行。并行模式下独立工具调用可以并发，Bash 也可能并发；含有必须串行执行的工具时整批保持顺序。需要长期使用不同默认值时，可在 `~/.config/owl/env` 中设置 `OWL_REASONING_LEVEL`、`OWL_MAX_OUTPUT_TOKENS`、`OWL_MAX_MODEL_CALLS`、`OWL_MAX_CONCURRENT_TOOLS` 和 `OWL_TOOL_EXECUTION_MODE`（`parallel` 或 `sequential`）。启动参数 `--reasoning`、`--max-output-tokens`、`--max-model-calls`、`--max-concurrent-tools`、`--parallel-tools` 和 `--sequential-tools` 优先于环境变量；推理等级以已注册模型支持的选项为准。
 
 开发检查使用 `npm run typecheck` 和 `npm test`。
 

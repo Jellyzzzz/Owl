@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ModelGateway } from "../model/gateway.js";
+import { ModelRequestError, type ModelGateway } from "../model/gateway.js";
 import type { Message, Request, Response, ToolCallBlock } from "../model/types.js";
 import { readToolResult } from "../model/tool-result.js";
 import { truncateTail } from "../tools/truncate.js";
@@ -425,6 +425,9 @@ export async function compact(
         try {
             response = await gateway.complete(summaryRequest, signal);
         } catch (error) {
+            if (error instanceof ModelRequestError) {
+                await emit({type:"compaction_usage",modelCallId:summaryRequest.modelCallId,usage:error.usage});
+            }
             signal.throwIfAborted();
             if (error instanceof Error && error.name === "AbortError") throw error;
             const message = error instanceof Error ? error.message : String(error);

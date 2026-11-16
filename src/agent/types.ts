@@ -73,6 +73,11 @@ export type AgentEvent=|{
         readonly event:ModelEvent;
     }
     |{
+        readonly type:"model_usage";
+        readonly modelCallId:string;
+        readonly usage:Usage|null;
+    }
+    |{
         readonly type:"tool_start";
         readonly call:ToolCallBlock;
     }

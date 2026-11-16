@@ -1,6 +1,6 @@
 import type{AssistantMessage as PiAssistantMessage}from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai";
-import type { ContentBlock,JsonValue,Response,Termination } from "./types.js";
+import type { ContentBlock,JsonValue,Response,Termination,Usage } from "./types.js";
 export function toTermination(message:PiAssistantMessage):Termination{
     const rawReason=message.rawStopReason??null;
     switch (message.stopReason){
@@ -47,7 +47,7 @@ export function toTermination(message:PiAssistantMessage):Termination{
             );
         }
 }
-export function fromPiAssistantMessage(message:PiAssistantMessage):Response{
+export function fromPiAssistantMessage(message:PiAssistantMessage,observedUsage?:Usage|null):Response{
     const content:ContentBlock[]=[];
     const replayBlocks:JsonValue[]=[];
     for(const block of message.content){
@@ -93,14 +93,14 @@ export function fromPiAssistantMessage(message:PiAssistantMessage):Response{
             return {
                 termination:toTermination(message),
 
-                usage:{
+                usage:observedUsage===undefined?{
                     inputTokens:message.usage.input??null,
                     outputTokens:message.usage.output??null,
                     totalTokens:message.usage.totalTokens??null,
                     cachedReadTokens:message.usage.cacheRead??null,
                     cachedWriteTokens:message.usage.cacheWrite??null,
                     reasoningTokens:message.usage.reasoning??null,
-                },
+                }:observedUsage,
 
                 message:{
                     role:"assistant",

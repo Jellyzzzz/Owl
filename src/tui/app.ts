@@ -34,6 +34,7 @@ export interface OwlTuiHooks {
     readonly cwd: string;
     readonly modelId: string;
     readonly contextWindow: number;
+    readonly runtimeSettings: () => {readonly reasoningLevel:string;readonly toolMode:string};
     readonly runUsage: () => UsageTotals;
     readonly sessionUsage: () => UsageTotals;
     /** Runs one submitted prompt/command. Rejects on failure. */
@@ -104,6 +105,7 @@ export class OwlTui {
 
         this.status = new StatusBar(() => ({
             model: this.hooks.modelId,
+            ...this.hooks.runtimeSettings(),
             contextTokens: this.contextTokens,
             contextWindow: this.hooks.contextWindow,
             runUsage: this.hooks.runUsage(),
@@ -171,6 +173,11 @@ export class OwlTui {
 
     requestRender(): void {
         if (!this.stopped) this.tui.requestRender();
+    }
+
+    updateContext(tokens:number|null):void {
+        this.contextTokens=tokens;
+        this.requestRender();
     }
 
     /** Replace the transcript with a new session's history. */
@@ -402,6 +409,14 @@ export class OwlTui {
 
         const isCompact = /^\/compact(?:\s|$)/.test(trimmed);
         if (this.busy) {
+            if (/^\/usage(?:\s|$)/.test(trimmed)) {
+                try {
+                    await this.hooks.onSubmit(trimmed);
+                } catch (error: unknown) {
+                    this.note(error instanceof Error ? error.message : String(error), "error");
+                }
+                return;
+            }
             if (isCompact) {
                 if (this.compactQueued || this.compactActive) {
                     this.note("压缩已在进行或等待中。", "warning");
@@ -414,6 +429,9 @@ export class OwlTui {
                     : "将在当前操作结束后压缩上下文…", "info");
             } else {
                 this.queue.push(trimmed);
+                if (/^\/(?:settings|reasoning|max-output|max-calls|concurrency|parallel|sequential)(?:\s|$)/.test(trimmed)) {
+                    this.note("任务进行中，运行设置将在前面的任务结束后应用。", "info");
+                }
             }
             this.requestRender();
             return;

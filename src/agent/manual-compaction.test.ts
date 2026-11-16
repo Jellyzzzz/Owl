@@ -4,7 +4,7 @@ import {mkdtemp,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {setTimeout as delay} from "node:timers/promises";
-import type {ModelGateway} from "../model/gateway.js";
+import {ModelRequestError,type ModelGateway} from "../model/gateway.js";
 import type {Message,Request,Response} from "../model/types.js";
 import {ToolRegistry} from "../tools/registry.js";
 import {AgentLoop} from "./loop.js";
@@ -153,6 +153,30 @@ test("cancellation and checkpoint write failure keep the old context",async()=>{
     await assert.rejects(unsaved.compact(options),/storage failed/);
     assert.deepEqual(unsaved.modelMessages,before);
     assert.equal(unsaved.compactionCheckpoint,undefined);
+});
+
+test("cancelled compaction records its model usage before stopping",async()=>{
+    let started!:()=>void;
+    const waiting=new Promise<void>(resolve=>{started=resolve;});
+    const saved:Array<{purpose:string|undefined;total:number|null}>=[];
+    const session=new AgentSession(new AgentLoop(gateway(async(_request,signal)=>{
+        started();
+        try{
+            await delay(10000,undefined,{signal});
+        }catch(error){
+            throw new ModelRequestError(error,usage);
+        }
+        return summaryResponse();
+    }),new ToolRegistry()),history(),undefined,{
+        persist:async(_id,value,purpose)=>{saved.push({purpose,total:value?.totalTokens??null});},
+    });
+    const pending=session.compact(options);
+    await waiting;
+    session.abort();
+    await assert.rejects(pending,error=>error instanceof Error&&error.name==="AbortError");
+    assert.deepEqual(saved,[{purpose:"compaction",total:24}]);
+    assert.equal(session.sessionUsage.reportedTokens,24);
+    assert.equal(session.compactionCheckpoint,undefined);
 });
 
 test("manual compaction aborts a running tool and waits for its error receipt",async()=>{

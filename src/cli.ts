@@ -4,7 +4,7 @@ import {homedir} from "node:os";
 import {join,resolve} from "node:path";
 import {createInterface} from "node:readline";
 import {parseArgs} from "node:util";
-import {createModels}from "@earendil-works/pi-ai";
+import {createModels,getSupportedThinkingLevels,type ModelThinkingLevel}from "@earendil-works/pi-ai";
 import {deepseekProvider}from "@earendil-works/pi-ai/providers/deepseek";
 import {PiGateway}from "./model/pi-gateway.js";
 import type{Message}from "./model/types.js";
@@ -22,6 +22,8 @@ import {
     loadSessionLog,restoreContextUsageAnchor,type LoadedSession,
 } from "./agent/session-log.js";
 import {createUsageTotals} from "./agent/usage.js";
+import {formatSessionUsage} from "./agent/usage-format.js";
+import {RuntimeOptions,type RuntimeOptionsUpdate} from "./agent/runtime-options.js";
 import {buildSystemPrompt} from "./agent/system-prompt.js";
 import type{AgentEvent,LoopOptions} from "./agent/types.js";
 import {OwlTui} from "./tui/app.js";
@@ -32,6 +34,14 @@ const SESSION_ID_PATTERN=/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const LOCAL_COMMANDS={
     "/resume":"恢复会话",
     "/compact":"压缩上下文，可附加摘要要求",
+    "/usage":"查看会话 token 用量",
+    "/settings":"查看和选择运行设置",
+    "/reasoning":"选择推理等级",
+    "/max-output":"设置单次输出 token 上限",
+    "/max-calls":"设置每次任务的模型调用上限",
+    "/concurrency":"设置工具并发上限",
+    "/parallel":"启用并行工具调用",
+    "/sequential":"启用顺序工具调用",
     "/help":"查看命令",
     "/exit":"退出 Owl",
 };
@@ -41,17 +51,28 @@ type SessionDirs={
     readonly legacyProject:string;
     readonly legacyRoot:string;
 };
+type SettingKey="reasoning"|"max-output"|"max-calls"|"concurrency"|"tool-mode";
+const VALUE_COMMANDS=new Set(["/reasoning","/max-output","/max-calls","/concurrency"]);
 
 function showCommands():void{
     for(const [name,description] of Object.entries(LOCAL_COMMANDS)){
-        console.log(`${name.padEnd(9)}${description}`);
+        console.log(`${name.padEnd(14)}${description}`);
     }
 }
 
 function commandsText():string{
     return Object.entries(LOCAL_COMMANDS)
-        .map(([name,description])=>`${name.padEnd(9)}${description}`)
+        .map(([name,description])=>`${name.padEnd(14)}${description}`)
         .join("\n");
+}
+
+function positiveInteger(value:string|undefined,fallback:number,label:string):number{
+    if(value===undefined) return fallback;
+    const parsed=Number(value);
+    if(value.trim()===""||!Number.isSafeInteger(parsed)||parsed<1){
+        throw new Error(`${label} 必须为正整数`);
+    }
+    return parsed;
 }
 
 function showHome(cwd:string):void{
@@ -136,7 +157,7 @@ async function main():Promise<void>{
         throw new Error("Missing DEEPSEEK_MODEL");
     }
     const modelId:string=configuredModelId;
-    if(thinkingMode!=="enabled"&&thinkingMode!=="disabled"){
+    if(thinkingMode!==undefined&&thinkingMode!=="enabled"&&thinkingMode!=="disabled"){
         throw new Error("DEEPSEEK_THINKING_MODE must be enabled or disabled");
     }
 
@@ -159,6 +180,11 @@ async function main():Promise<void>{
             session:{type:"string"},
             resume:{type:"boolean",default:false},
             "parallel-tools":{type:"boolean",default:false},
+            "sequential-tools":{type:"boolean",default:false},
+            reasoning:{type:"string"},
+            "max-output-tokens":{type:"string"},
+            "max-model-calls":{type:"string"},
+            "max-concurrent-tools":{type:"string"},
             "compact-at":{type:"string"},
             tui:{type:"boolean",default:false},
             "no-tui":{type:"boolean",default:false},
@@ -171,13 +197,28 @@ async function main():Promise<void>{
     if(values.resume&&values.session!==undefined){
         throw new Error("Choose either --resume or --session");
     }
-    const maxOutputTokens=Math.min(8192,model.maxTokens);
+    if(values["parallel-tools"]&&values["sequential-tools"]){
+        throw new Error("Choose either --parallel-tools or --sequential-tools");
+    }
+    const reasoningLevel=(values.reasoning??process.env.OWL_REASONING_LEVEL??
+        (thinkingMode==="disabled"?"off":"high")) as ModelThinkingLevel;
+    const supportedReasoningLevels=getSupportedThinkingLevels(model);
+    const maxOutputTokens=positiveInteger(
+        values["max-output-tokens"]??process.env.OWL_MAX_OUTPUT_TOKENS,
+        Math.min(32768,model.maxTokens,model.contextWindow-1),"输出上限",
+    );
+    const maxModelCalls=positiveInteger(values["max-model-calls"]??process.env.OWL_MAX_MODEL_CALLS,100,"模型调用上限");
+    const maxConcurrentTools=positiveInteger(values["max-concurrent-tools"]??process.env.OWL_MAX_CONCURRENT_TOOLS,5,"工具并发上限");
     const maxInputTokens=model.contextWindow-maxOutputTokens;
     const compactAt=values["compact-at"]===undefined?undefined:Number(values["compact-at"]);
     if(compactAt!==undefined&&(!Number.isSafeInteger(compactAt)||compactAt<1||compactAt>maxInputTokens)){
         throw new Error(`--compact-at requires an integer from 1 to ${maxInputTokens}`);
     }
-    const parallelTools=values["parallel-tools"];
+    const configuredToolMode=values["parallel-tools"]?"parallel":values["sequential-tools"]?"sequential":
+        (process.env.OWL_TOOL_EXECUTION_MODE??"sequential");
+    if(configuredToolMode!=="parallel"&&configuredToolMode!=="sequential"){
+        throw new Error("OWL_TOOL_EXECUTION_MODE must be parallel or sequential");
+    }
 
     // 将已装配的模型入口交给 Gateway
     const gateway=new PiGateway(models);
@@ -187,15 +228,15 @@ async function main():Promise<void>{
     registry.register(WriteTool);
     registry.register(GrepTool);
     registry.register(FindTool);
-    registry.register(parallelTools?{
+    registry.register({
         ...BashTool,
         mode:"parallel",
         definition:{
             ...BashTool.definition,
             description:BashTool.definition.description+
-                " Calls in the same response may run concurrently. Group independent read-only commands in one response. Run writes and dependent commands in separate responses.",
+                " When parallel execution is enabled, calls in the same response may run concurrently. Group independent read-only commands in one response. Run writes and dependent commands in separate responses.",
         },
-    }:BashTool);
+    });
     const loop=new AgentLoop(gateway,registry);
 
     const cwd=process.cwd();
@@ -237,7 +278,7 @@ async function main():Promise<void>{
             initialTotals:usageTotals,
             initialCheckpoint:checkpoint,
             initialContextAnchor:restoreContextUsageAnchor(loaded,{
-                model:options.model,systemPrompt:options.systemPrompt,tools:registry.definitions(),
+                model:runtimeOptions.get().model,systemPrompt:runtimeOptions.get().systemPrompt,tools:registry.definitions(),
             }),
             persistCompaction:record=>persist(appendSessionEntry(filePath,record)),
             persist:(modelCallId,usage,purpose)=>
@@ -269,20 +310,124 @@ async function main():Promise<void>{
         return true;
     }
 
-    const options:LoopOptions={
+    const initialOptions:LoopOptions={
         cwd,
         model:{providerId:"deepseek",modelId},
-        thinkingJson:thinkingMode==="enabled"
-            ?JSON.stringify({reasoning:"high"})
-            :"{}",
+        thinkingJson:"{}",
         systemPrompt:buildSystemPrompt(cwd),
         maxOutputTokens,
-        reserveTokens:compactAt===undefined?16384:model.contextWindow-compactAt,
+        reserveTokens:compactAt===undefined?Math.max(16384,maxOutputTokens):model.contextWindow-compactAt,
         contextWindow:model.contextWindow,
-        maxModelCalls:100,
-        maxConcurrentTools:5,
-        ToolExecutionMode:parallelTools?"parallel":"sequential",
+        maxModelCalls,
+        maxConcurrentTools,
+        ToolExecutionMode:configuredToolMode,
     };
+    const runtimeOptions=new RuntimeOptions(initialOptions,reasoningLevel,supportedReasoningLevels,model.maxTokens,compactAt);
+
+    function formatRuntimeOptions():string{
+        const current=runtimeOptions.get();
+        return [
+            `推理等级：${runtimeOptions.reasoningLevel}`,
+            `单次输出上限：${current.maxOutputTokens.toLocaleString("en-US")} tokens`,
+            `每次任务模型调用上限：${current.maxModelCalls}`,
+            `工具执行：${current.ToolExecutionMode}`,
+            `工具并发上限：${current.maxConcurrentTools}${current.ToolExecutionMode==="sequential"?"（顺序模式下不生效）":""}`,
+            `上下文预留：${current.reserveTokens?.toLocaleString("en-US")} tokens`,
+        ].join("\n");
+    }
+
+    function settingChoices(key:SettingKey):SelectItem[]{
+        const current=runtimeOptions.get();
+        let values:string[];
+        let selected:string;
+        switch(key){
+            case "reasoning":
+                values=[...runtimeOptions.supportedReasoningLevels];
+                selected=runtimeOptions.reasoningLevel;
+                break;
+            case "max-output":{
+                const limit=Math.min(runtimeOptions.maxOutputTokensLimit,
+                    compactAt===undefined?runtimeOptions.maxOutputTokensLimit:current.contextWindow-compactAt);
+                values=[8192,16384,32768,65536,131072,limit,current.maxOutputTokens]
+                    .filter(value=>value<=limit).sort((a,b)=>a-b).map(String);
+                selected=String(current.maxOutputTokens);
+                break;
+            }
+            case "max-calls":
+                values=[25,50,100,200,500,current.maxModelCalls].sort((a,b)=>a-b).map(String);
+                selected=String(current.maxModelCalls);
+                break;
+            case "concurrency":
+                values=[1,2,5,10,20,current.maxConcurrentTools].sort((a,b)=>a-b).map(String);
+                selected=String(current.maxConcurrentTools);
+                break;
+            case "tool-mode":
+                values=["sequential","parallel"];
+                selected=current.ToolExecutionMode;
+                break;
+        }
+        return [...new Set(values)].map(value=>({
+            value,label:value,description:value===selected?"当前":"",
+        }));
+    }
+
+    function applyRuntimeSetting(key:SettingKey,value:string):string{
+        let update:RuntimeOptionsUpdate;
+        switch(key){
+            case "reasoning": update={reasoningLevel:value as ModelThinkingLevel}; break;
+            case "max-output": update={maxOutputTokens:positiveInteger(value,0,"输出上限")}; break;
+            case "max-calls": update={maxModelCalls:positiveInteger(value,0,"模型调用上限")}; break;
+            case "concurrency": update={maxConcurrentTools:positiveInteger(value,0,"工具并发上限")}; break;
+            case "tool-mode":
+                if(value!=="parallel"&&value!=="sequential") throw new Error("执行模式必须为 parallel 或 sequential");
+                update={toolExecutionMode:value};
+                break;
+        }
+        const previousReasoning=runtimeOptions.reasoningLevel;
+        runtimeOptions.set(update);
+        if(previousReasoning!==runtimeOptions.reasoningLevel){
+            activeSession?.invalidateContextUsage();
+        }
+        const detail=key==="tool-mode"&&value==="parallel"
+            ?"；可并行的 Bash 调用也会并发执行"
+            :"";
+        return `运行设置已更新：${key} = ${value}${detail}（下次任务生效）`;
+    }
+
+    async function chooseRuntimeSetting(ui:OwlTui,key:SettingKey,value?:string):Promise<void>{
+        const picked=value??(await ui.select("选择运行设置",settingChoices(key)))?.value;
+        if(picked===undefined) return;
+        const message=applyRuntimeSetting(key,picked);
+        const context=activeSession?.state.messages.length
+            ?activeSession.estimateContext(runtimeOptions.get()).estimatedInputTokens
+            :null;
+        ui.updateContext(context);
+        ui.note(message,"success");
+    }
+
+    function handleTextSetting(text:string):boolean{
+        const [command,...args]=text.split(/\s+/);
+        if(command==="/settings"){
+            if(args.length) throw new Error("/settings 不接受参数");
+            console.log(formatRuntimeOptions());
+            return true;
+        }
+        if(command==="/parallel"||command==="/sequential"){
+            if(args.length) throw new Error(`${command} 不接受参数`);
+            console.log(applyRuntimeSetting("tool-mode",command.slice(1)));
+            return true;
+        }
+        if(!VALUE_COMMANDS.has(command)) return false;
+        if(args.length>1) throw new Error(`${command} 最多接受一个参数`);
+        const key=command.slice(1) as SettingKey;
+        if(args.length===0){
+            const suffix=key==="reasoning"?"":"；也可提供有效的自定义数值";
+            console.log(`${command} 可选：${settingChoices(key).map(item=>item.value).join(", ")}${suffix}。`);
+        }else{
+            console.log(applyRuntimeSetting(key,args[0]));
+        }
+        return true;
+    }
 
     function onAgentEvent(event:AgentEvent,session:AgentSession):void{
         if(tui!==undefined){
@@ -291,7 +436,7 @@ async function main():Promise<void>{
         }
         if(event.type==="turn_start"){
             const {estimatedInputTokens}=event.contextBudget;
-            const {contextWindow}=options;
+            const {contextWindow}=runtimeOptions.get();
             const percent=100*estimatedInputTokens/contextWindow;
             console.log(
                 `本次请求预计输入 ${formatTokens(estimatedInputTokens)} / ${formatTokens(contextWindow)} tokens（占窗口 ${percent.toFixed(1)}%）`,
@@ -331,7 +476,7 @@ async function main():Promise<void>{
         const session=activeSession??activateSession(
         join(sessionDirs.current,`${randomUUID()}.jsonl`),
         );
-        const result=await session.prompt(text,options);
+        const result=await session.prompt(text,runtimeOptions.get());
         // 取消收尾也可能写入工具回执，写入失败时应退出 CLI。
         if(persistenceError!==undefined){
             throw persistenceError;
@@ -352,7 +497,7 @@ async function main():Promise<void>{
 
     async function runCompact(customInstructions?:string):Promise<void>{
         if(activeSession===undefined) throw new Error("当前没有会话可压缩");
-        await activeSession.compact(options,customInstructions);
+        await activeSession.compact(runtimeOptions.get(),customInstructions);
         if(persistenceError!==undefined) throw persistenceError;
     }
 
@@ -387,7 +532,7 @@ async function main():Promise<void>{
         activateSession(picked.value,loaded);
         ui.reset(
             sessionLabelOf(picked.value),loaded.messages,loaded.checkpoint!==undefined,
-            loaded.messages.length ? activeSession?.estimateContext(options).estimatedInputTokens ?? null : null,
+            loaded.messages.length ? activeSession?.estimateContext(runtimeOptions.get()).estimatedInputTokens ?? null : null,
         );
         ui.note("已切换会话","success");
         return true;
@@ -402,14 +547,18 @@ async function main():Promise<void>{
         const ui=new OwlTui({
             cwd,
             modelId,
-            contextWindow:options.contextWindow,
+            contextWindow:runtimeOptions.get().contextWindow,
+            runtimeSettings:()=>({
+                reasoningLevel:runtimeOptions.reasoningLevel,
+                toolMode:runtimeOptions.get().ToolExecutionMode,
+            }),
             runUsage:()=>activeSession?.runUsage??createUsageTotals(),
             sessionUsage:()=>activeSession?.sessionUsage??createUsageTotals(),
             onSubmit:async text=>{
                 const [token]=text.split(/\s+/,1);
                 const command=token==="/quit"?"/exit":token;
 
-                if(command!=="/compact"&&Object.hasOwn(LOCAL_COMMANDS,command)&&text!==token){
+                if(command!=="/compact"&&!VALUE_COMMANDS.has(command)&&Object.hasOwn(LOCAL_COMMANDS,command)&&text!==token){
                     ui.note(`${token} 不接受参数。`,"warning");
                     return;
                 }
@@ -419,6 +568,37 @@ async function main():Promise<void>{
                 }
                 if(command==="/help"){
                     ui.note(commandsText(),"dim");
+                    return;
+                }
+                if(command==="/usage"){
+                    ui.note(formatSessionUsage(
+                        activeSession?.sessionUsage??createUsageTotals(),activeSession?.signal!==undefined,
+                    ),"info");
+                    return;
+                }
+                if(command==="/settings"){
+                    const current=runtimeOptions.get();
+                    const item=await ui.select("运行设置",[
+                        {value:"reasoning",label:`推理等级：${runtimeOptions.reasoningLevel}`},
+                        {value:"max-output",label:`单次输出上限：${current.maxOutputTokens} tokens`},
+                        {value:"max-calls",label:`每次任务模型调用上限：${current.maxModelCalls}`},
+                        {value:"tool-mode",label:`工具执行：${current.ToolExecutionMode}`},
+                        {value:"concurrency",label:`工具并发上限：${current.maxConcurrentTools}`},
+                    ]);
+                    if(item!==undefined) await chooseRuntimeSetting(ui,item.value as SettingKey);
+                    return;
+                }
+                if(command==="/parallel"||command==="/sequential"){
+                    await chooseRuntimeSetting(ui,"tool-mode",command.slice(1));
+                    return;
+                }
+                if(VALUE_COMMANDS.has(command)){
+                    const args=text.split(/\s+/).slice(1);
+                    if(args.length>1){
+                        ui.note(`${command} 最多接受一个参数。`,"warning");
+                        return;
+                    }
+                    await chooseRuntimeSetting(ui,command.slice(1) as SettingKey,args[0]);
                     return;
                 }
                 if(command==="/resume"){
@@ -435,8 +615,8 @@ async function main():Promise<void>{
                     }
                     return;
                 }
-                if(/^\/[a-z][a-z0-9-]*$/i.test(text)){
-                    ui.note(`未知命令 ${text}。输入 /help 查看命令。`,"warning");
+                if(/^\/[a-z][a-z0-9-]*$/i.test(token)){
+                    ui.note(`未知命令 ${token}。输入 /help 查看命令。`,"warning");
                     return;
                 }
                 try{
@@ -465,7 +645,7 @@ async function main():Promise<void>{
                 ui.reset(
                     sessionLabelOf(activeSessionPath),activeSession.state.messages,
                     activeSession.compactionCheckpoint!==undefined,
-                    activeSession.state.messages.length ? activeSession.estimateContext(options).estimatedInputTokens : null,
+                    activeSession.state.messages.length ? activeSession.estimateContext(runtimeOptions.get()).estimatedInputTokens : null,
                 );
             }
             await ui.start(openPicker?"/resume":undefined);
@@ -531,6 +711,22 @@ async function main():Promise<void>{
         if(args.length>0){
             input?.close();
             const text=args.join(" ").trim();
+            try{
+                if(handleTextSetting(text)) return;
+            }catch(error:unknown){
+                console.error(error instanceof Error?error.message:String(error));
+                process.exitCode=1;
+                return;
+            }
+            if(/^\/usage(?:\s|$)/.test(text)){
+                if(text!=="/usage"){
+                    console.error("/usage 不接受参数。");
+                    process.exitCode=1;
+                }else{
+                    console.log(formatSessionUsage(activeSession?.sessionUsage??createUsageTotals()));
+                }
+                return;
+            }
             if(/^\/compact(?:\s|$)/.test(text)){
                 try{
                     await runCompact(text.slice("/compact".length).trim()||undefined);
@@ -566,8 +762,14 @@ async function main():Promise<void>{
 
             const [token]=text.split(/\s+/,1);
             const command=token==="/quit"?"/exit":token;
-            if(command!=="/compact"&&Object.hasOwn(LOCAL_COMMANDS,command)&&text!==token){
+            if(command!=="/compact"&&!VALUE_COMMANDS.has(command)&&Object.hasOwn(LOCAL_COMMANDS,command)&&text!==token){
                 console.error(`${token} 不接受参数。`);
+                continue;
+            }
+            try{
+                if(handleTextSetting(text)) continue;
+            }catch(error:unknown){
+                console.error(error instanceof Error?error.message:String(error));
                 continue;
             }
             if(command==="/exit"){
@@ -575,6 +777,10 @@ async function main():Promise<void>{
             }
             if(command==="/help"){
                 showCommands();
+                continue;
+            }
+            if(command==="/usage"){
+                console.log(formatSessionUsage(activeSession?.sessionUsage??createUsageTotals()));
                 continue;
             }
             if(command==="/resume"){
@@ -595,8 +801,8 @@ async function main():Promise<void>{
                 }
                 continue;
             }
-            if(/^\/[a-z][a-z0-9-]*$/i.test(text)){
-                console.error(`未知命令 ${text}。输入 /help 查看命令。`);
+            if(/^\/[a-z][a-z0-9-]*$/i.test(token)){
+                console.error(`未知命令 ${token}。输入 /help 查看命令。`);
                 continue;
             }
             await runPrompt(text);

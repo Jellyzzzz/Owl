@@ -1,4 +1,4 @@
-import type{ModelGateway} from "../model/gateway.js";
+import {ModelRequestError,type ModelGateway} from "../model/gateway.js";
 import type{Request,Response,Message,ToolCallBlock} from "../model/types.js";
 import {ToolRegistry} from "../tools/registry.js";
 import type {AgentEventSink,CompactionReason,CompactionResult,LoopOptions,LoopStopReason,LoopResult} from "./types.js";
@@ -190,15 +190,22 @@ export class AgentLoop{
         return result;
     }   
     private async callModel(request:Request,signal:AbortSignal,emit:AgentEventSink):Promise<Response>{
-        for await(const event of this.gateway.stream(request,signal)){
-            await emit({
-                type:"model_event",
-                modelCallId:request.modelCallId,
-                event:event,
-            })
-            if(event.type==="done"){
-                return event.response;
+        try{
+            for await(const event of this.gateway.stream(request,signal)){
+                await emit({
+                    type:"model_event",
+                    modelCallId:request.modelCallId,
+                    event:event,
+                })
+                if(event.type==="done"){
+                    return event.response;
+                }
             }
+        }catch(error){
+            if(error instanceof ModelRequestError){
+                await emit({type:"model_usage",modelCallId:request.modelCallId,usage:error.usage});
+            }
+            throw error;
         }
         throw new Error("Model stream ended without a final response");
     }
