@@ -8,6 +8,8 @@ import type{JsonValue,Message,Request,ToolCallBlock,ToolDefinition} from "../src
 import {readToolResult} from "../src/model/tool-result.js";
 import {BashTool} from "../src/tools/bash.js";
 import {EditTool} from "../src/tools/edit.js";
+import {FindTool} from "../src/tools/find.js";
+import {GrepTool} from "../src/tools/grep.js";
 import {ReadTool} from "../src/tools/read.js";
 import {ToolRegistry,type ToolExecutionResult} from "../src/tools/registry.js";
 import {WriteTool} from "../src/tools/write.js";
@@ -105,6 +107,8 @@ async function runBenchmark():Promise<void>{
     registry.register(ReadTool);
     registry.register(EditTool);
     registry.register(WriteTool);
+    registry.register(GrepTool);
+    registry.register(FindTool);
     registry.register(BashTool);
     const tools=registry.definitions();
     const systemPrompt=buildSystemPrompt(cwd);
@@ -232,7 +236,7 @@ async function runBenchmark():Promise<void>{
         console.log("Owl 工具上下文 token 观测");
         console.log(`估算规则：UTF-8 字节 / 4；contextWindow=${number(CONTEXT_WINDOW)}，reserve=${number(RESERVE_TOKENS)}`);
         console.log("场景：read 3,000 行文件（实际截断）→ edit 3 处 → write 150 行文件 → bash 5,000 行输出");
-        console.log(`固定开销：system prompt ${number(fixedWithoutTools)} tokens；4 个工具定义另加 ${number(perCallToolOverhead)} tokens/次请求`);
+        console.log(`固定开销：system prompt ${number(fixedWithoutTools)} tokens；${tools.length} 个工具定义另加 ${number(perCallToolOverhead)} tokens/次请求`);
         console.log("");
         console.log("1) 工具定义（每次模型请求都会重新发送）");
         console.log(`${pad("tool",10)}${pad("bytes",12)}${pad("tokens",12)}`);

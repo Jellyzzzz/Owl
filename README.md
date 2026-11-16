@@ -1,6 +1,8 @@
 # Owl
 
-Owl 是一个 TypeScript 编码 Agent，提供终端交互、文件读取、编辑与写入、Bash 工具、会话恢复和上下文压缩。
+Owl 是一个 TypeScript 编码 Agent，提供终端交互、文件读取、编辑与写入、内容搜索、文件查找、Bash 工具、会话恢复和上下文压缩。
+
+内置 `grep` 和 `find` 分别用于内容搜索和 glob 文件查找；在 Git 仓库中会遵守 `.gitignore`，结果受数量和字节上限约束。
 
 运行需要 Node.js 22.19 或更新版本、npm 和 Bash。在 Owl 目录安装依赖：
 
@@ -35,7 +37,7 @@ owl
 npm run token:report
 ```
 
-它会实际执行一次 `read → edit → write → bash`，基于项目自己的 `measureContext` 输出工具定义开销、单次结果对比、整个 run 的累计输入成本，以及每个工具对上下文的累计贡献。
+它会实际执行一次 `read → edit → write → bash`，并计入全部工具定义开销；基于项目自己的 `measureContext` 输出工具定义开销、单次结果对比、整个 run 的累计输入成本，以及每个工具对上下文的累计贡献。
 
 分析真实会话：
 

@@ -1,5 +1,6 @@
-export const DEFAULT_MAX_LINES=2000;
-export const DEFAULT_MAX_BYTES=50*1024;
+export const DEFAULT_MAX_LINES=1200;
+export const DEFAULT_MAX_BYTES=12*1024;
+export const GREP_MAX_LINE_LENGTH=500;
 
 export interface TruncatedResult{
     content:string;
@@ -37,6 +38,12 @@ export function formatSize(bytes:number):string{
         return `${(bytes/1024).toFixed(1)}KB`;
     }
     return `${(bytes/(1024*1024)).toFixed(1)}MB`;
+}
+export function truncateLine(line:string,maxChars=GREP_MAX_LINE_LENGTH):{text:string;wasTruncated:boolean}{
+    if(line.length<=maxChars){
+        return {text:line,wasTruncated:false};
+    }
+    return {text:`${line.slice(0,maxChars)}... [truncated]`,wasTruncated:true};
 }
 export function truncateHead(content:string,options:TruncatedOptions={}):TruncatedResult{
     const maxLines=options.maxLines??DEFAULT_MAX_LINES;

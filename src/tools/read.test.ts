@@ -5,6 +5,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type{ToolContext,ToolResult} from "./types.js";
 import {ReadTool} from "./read.js";
+import {DEFAULT_MAX_BYTES,DEFAULT_MAX_LINES,formatSize} from "./truncate.js";
 
 let testDir:string;
 
@@ -66,14 +67,15 @@ test("read: empty files return empty text",async()=>{
 
 test("read: truncates files exceeding the line limit",async()=>{
     const file=join(testDir,"large.txt");
-    const lines=Array.from({length:2500},(_,index)=>`Line ${index+1}`);
+    const totalLines=DEFAULT_MAX_LINES+500;
+    const lines=Array.from({length:totalLines},(_,index)=>`Line ${index+1}`);
     await writeFile(file,lines.join("\n"));
 
     const output=text(await read({path:file}));
     assert.ok(output.includes("Line 1"));
-    assert.ok(output.includes("Line 2000"));
-    assert.ok(!output.includes("Line 2001"));
-    assert.ok(output.includes("[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]"));
+    assert.ok(output.includes(`Line ${DEFAULT_MAX_LINES}`));
+    assert.ok(!output.includes(`Line ${DEFAULT_MAX_LINES+1}`));
+    assert.ok(output.includes(`[Showing lines 1-${DEFAULT_MAX_LINES} of ${totalLines}. Use offset=${DEFAULT_MAX_LINES+1} to continue.]`));
 });
 
 test("read: truncates files exceeding the byte limit",async()=>{
@@ -83,7 +85,8 @@ test("read: truncates files exceeding the byte limit",async()=>{
 
     const output=text(await read({path:file}));
     assert.ok(output.includes("Line 1:"));
-    assert.match(output,/\[Showing lines 1-\d+ of 500 \(50\.0KB limit\)\. Use offset=\d+ to continue\.\]/);
+    const size=formatSize(DEFAULT_MAX_BYTES).replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    assert.match(output,new RegExp(`\\[Showing lines 1-\\d+ of 500 \\(${size} limit\\)\\. Use offset=\\d+ to continue\\.\\]`));
 });
 
 test("read: offset starts reading at a 1-indexed line",async()=>{
@@ -135,7 +138,7 @@ test("read: offset beyond the end of the file is an error",async()=>{
 
 test("read: returns truncation details",async()=>{
     const file=join(testDir,"details.txt");
-    const lines=Array.from({length:2500},(_,index)=>`Line ${index+1}`);
+    const lines=Array.from({length:DEFAULT_MAX_LINES+500},(_,index)=>`Line ${index+1}`);
     await writeFile(file,lines.join("\n"));
 
     const details=await read({path:file});
@@ -143,17 +146,18 @@ test("read: returns truncation details",async()=>{
     assert.ok(truncation);
     assert.equal(truncation.truncated,true);
     assert.equal(truncation.truncatedBy,"lines");
-    assert.equal(truncation.totalLines,2500);
-    assert.equal(truncation.outputLines,2000);
+    assert.equal(truncation.totalLines,DEFAULT_MAX_LINES+500);
+    assert.equal(truncation.outputLines,DEFAULT_MAX_LINES);
 });
 
 test("read: points at bash when the first line exceeds the byte limit",async()=>{
     const file=join(testDir,"one-long-line.txt");
-    await writeFile(file,"x".repeat(60*1024));
+    const lineBytes=Math.max(60*1024,DEFAULT_MAX_BYTES+1024);
+    await writeFile(file,"x".repeat(lineBytes));
 
     const result=await read({path:file});
     const output=text(result);
-    assert.ok(output.startsWith("[Line 1 is 60.0KB, exceeds 50.0KB limit. Use bash: sed -n '1p'"));
+    assert.ok(output.startsWith(`[Line 1 is ${formatSize(lineBytes)}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '1p'`));
     const truncation=(result.details as {truncation?:Record<string,unknown>}).truncation;
     assert.equal(truncation?.firstLineExceedsLimit,true);
 });

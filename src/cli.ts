@@ -12,6 +12,8 @@ import {ToolRegistry} from "./tools/registry.js";
 import {ReadTool} from "./tools/read.js";
 import {EditTool} from "./tools/edit.js";
 import {WriteTool} from "./tools/write.js";
+import {GrepTool} from "./tools/grep.js";
+import {FindTool} from "./tools/find.js";
 import {BashTool} from "./tools/bash.js";
 import {AgentLoop} from "./agent/loop.js";
 import {AgentSession} from "./agent/session.js";
@@ -183,6 +185,8 @@ async function main():Promise<void>{
     registry.register(ReadTool);
     registry.register(EditTool);
     registry.register(WriteTool);
+    registry.register(GrepTool);
+    registry.register(FindTool);
     registry.register(parallelTools?{
         ...BashTool,
         mode:"parallel",

@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {formatSize,truncateHead,truncateTail} from "./truncate.js";
+import {formatSize,truncateHead,truncateLine,truncateTail} from "./truncate.js";
 
 test("truncate: head keeps content that fits within both limits",()=>{
     const result=truncateHead("alpha\nbeta\ngamma");
@@ -61,4 +61,12 @@ test("truncate: formatSize uses human-readable units",()=>{
     assert.equal(formatSize(1024),"1.0KB");
     assert.equal(formatSize(50*1024),"50.0KB");
     assert.equal(formatSize(1024*1024),"1.0MB");
+});
+
+test("truncate: lines over the grep limit are marked",()=>{
+    assert.deepEqual(truncateLine("short"),{text:"short",wasTruncated:false});
+    const truncated=truncateLine("x".repeat(501));
+    assert.equal(truncated.wasTruncated,true);
+    assert.equal(truncated.text.length,500+"... [truncated]".length);
+    assert.ok(truncated.text.endsWith("... [truncated]"));
 });
