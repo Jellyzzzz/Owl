@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve the launcher itself, including a link in ~/.local/bin, without changing
+# the caller's working directory.
+source_path="${BASH_SOURCE[0]}"
+link_count=0
+while [[ -L "$source_path" ]]; do
+    ((link_count += 1))
+    if ((link_count > 40)); then
+        printf 'owl: too many symbolic links while resolving the launcher\n' >&2
+        exit 1
+    fi
+    source_dir="$(cd -P -- "$(dirname -- "$source_path")" && pwd)"
+    link_target="$(readlink "$source_path")"
+    if [[ "$link_target" = /* ]]; then
+        source_path="$link_target"
+    else
+        source_path="$source_dir/$link_target"
+    fi
+done
+owl_root="$(cd -P -- "$(dirname -- "$source_path")/.." && pwd)"
+loader="$owl_root/node_modules/tsx/dist/loader.mjs"
+entry="$owl_root/src/cli.ts"
+
+if [[ ! -f "$loader" ]]; then
+    printf 'owl: dependencies are missing; run npm ci in %s\n' "$owl_root" >&2
+    exit 1
+fi
+if [[ ! -f "$entry" ]]; then
+    printf 'owl: entry point not found: %s\n' "$entry" >&2
+    exit 1
+fi
+
+# Explicit environment variables take precedence over the selected env file.
+# A user config applies to every workspace; the repository file is a fallback
+# for existing development installations.
+config_root="${XDG_CONFIG_HOME:-${HOME:?HOME is not set}/.config}"
+env_file="$config_root/owl/env"
+if [[ ! -f "$env_file" ]]; then
+    if [[ -f "$owl_root/.env.local" ]]; then
+        env_file="$owl_root/.env.local"
+    else
+        env_file=""
+    fi
+fi
+
+if [[ -n "$env_file" ]]; then
+    exec node "--env-file=$env_file" --import "$loader" "$entry" "$@"
+fi
+exec node --import "$loader" "$entry" "$@"

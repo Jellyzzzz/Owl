@@ -1,0 +1,27 @@
+{
+  "name": "owl-coding-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "owl": "./bin/owl"
+  },
+  "scripts": {
+    "owl": "node --env-file-if-exists=.env.local --import tsx src/cli.ts",
+    "owl:text": "node --env-file-if-exists=.env.local --import tsx src/cli.ts --no-tui",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test 'src/**/*.test.ts'"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^1.1.0",
+    "@earendil-works/pi-tui": "^1.5.2"
+  }
+}
