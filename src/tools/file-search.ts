@@ -1,32 +1,36 @@
-import {execFile} from "node:child_process";
-import {readdir,realpath,stat} from "node:fs/promises";
-import {basename,join,matchesGlob,relative,sep} from "node:path";
-import {promisify} from "node:util";
+import {stat} from "node:fs/promises";
+import {basename,matchesGlob,relative,sep} from "node:path";
 
-const execFileAsync=promisify(execFile);
-const GIT_MAX_BUFFER=64*1024*1024;
-const SKIPPED_DIRECTORIES=new Set([".git","node_modules"]);
+export interface SearchPathInfo{
+    readonly isDirectory:boolean;
+}
 
-export async function listFiles(root:string,signal:AbortSignal):Promise<string[]>{
-    signal.throwIfAborted();
-    const rootStat=await stat(root);
-    if(rootStat.isFile()){
-        return [root];
+export async function inspectSearchPath(searchPath:string):Promise<SearchPathInfo>{
+    let info;
+    try{
+        info=await stat(searchPath);
+    }catch(error:unknown){
+        const code=(error as NodeJS.ErrnoException).code;
+        if(code==="ENOENT"||code==="ENOTDIR"){
+            throw new Error(`Path not found: ${searchPath}`);
+        }
+        throw new Error(`Cannot access path ${searchPath}: ${error instanceof Error?error.message:String(error)}`);
     }
-    if(!rootStat.isDirectory()){
-        throw new Error(`Path is not a file or directory: ${root}`);
+    if(!info.isDirectory()&&!info.isFile()){
+        throw new Error(`Path is not a file or directory: ${searchPath}`);
     }
-    const gitFiles=await listGitFiles(root,signal);
-    if(gitFiles!==undefined){
-        return gitFiles;
-    }
-    return walkFiles(root,signal);
+    return {isDirectory:info.isDirectory()};
 }
 
 /**
- * Match a path the way Pi's find tool does: a pattern without a slash matches
- * the basename at any depth, while a path-containing pattern is matched
- * relative to the search root.
+ * Match a path with glob semantics similar to ripgrep's --glob. A pattern
+ * without a slash matches the basename at any depth; a path-containing
+ * pattern is matched relative to the search root.
+ *
+ * Node's matchesGlob treats dotfiles specially, while ripgrep searches hidden
+ * files when --hidden is set. The fallback strips dots only from directory
+ * segments so `**\/*.ts` still matches `.hidden/hidden.ts` without making
+ * `*.ts` match an unrelated file named `ts`.
  */
 export function matchesPathPattern(filePath:string,pattern:string):boolean{
     const normalizedPath=filePath.split(sep).join("/");
@@ -42,85 +46,20 @@ export function matchesPathPattern(filePath:string,pattern:string):boolean{
     if(!normalizedPattern.startsWith("/")&&!normalizedPattern.startsWith("**/")&&normalizedPattern!=="**"){
         normalizedPattern=`**/${normalizedPattern}`;
     }
-    return matchesGlob(normalizedPath,normalizedPattern);
+    if(matchesGlob(normalizedPath,normalizedPattern)){
+        return true;
+    }
+    return matchesGlob(stripHiddenDirectories(normalizedPath),normalizedPattern);
 }
 
-async function listGitFiles(root:string,signal:AbortSignal):Promise<string[]|undefined>{
-    let repoRoot:string;
-    try{
-        const {stdout}=await execFileAsync(
-            "git",
-            ["-C",root,"rev-parse","--show-toplevel"],
-            {signal:signal,maxBuffer:GIT_MAX_BUFFER},
-        );
-        repoRoot=stdout.trim();
-    }catch{
-        if(signal.aborted){
-            signal.throwIfAborted();
-        }
-        return undefined;
-    }
-    if(repoRoot.length===0){
-        return undefined;
-    }
-    try{
-        const {stdout}=await execFileAsync(
-            "git",
-            ["-C",repoRoot,"ls-files","--cached","--others","--exclude-standard","-z"],
-            {signal:signal,maxBuffer:GIT_MAX_BUFFER},
-        );
-        const realRoot=await realpath(root);
-        const realRepoRoot=await realpath(repoRoot);
-        const rootRelative=relative(realRepoRoot,realRoot).split(sep).join("/");
-        const files:string[]=[];
-        for(const relativePath of stdout.split("\0")){
-            if(relativePath.length===0){
-                continue;
-            }
-            const normalizedPath=relativePath.replaceAll("\\","/");
-            if(
-                rootRelative.length>0&&
-                normalizedPath!==rootRelative&&
-                !normalizedPath.startsWith(`${rootRelative}/`)
-            ){
-                continue;
-            }
-            const withinRoot=rootRelative.length===0
-                ?normalizedPath
-                :normalizedPath.slice(rootRelative.length+1);
-            files.push(join(root,withinRoot));
-        }
-        return files;
-    }catch{
-        if(signal.aborted){
-            signal.throwIfAborted();
-        }
-        return undefined;
-    }
-}
-
-async function walkFiles(directory:string,signal:AbortSignal,output:string[]=[]):Promise<string[]>{
-    signal.throwIfAborted();
-    let entries;
-    try{
-        entries=await readdir(directory,{withFileTypes:true});
-    }catch{
-        return output;
-    }
-    entries.sort((left,right)=>left.name.localeCompare(right.name));
-    for(const entry of entries){
-        signal.throwIfAborted();
-        if(SKIPPED_DIRECTORIES.has(entry.name)){
-            continue;
-        }
-        const absolutePath=join(directory,entry.name);
-        if(entry.isDirectory()){
-            await walkFiles(absolutePath,signal,output);
-        }else if(entry.isFile()){
-            output.push(absolutePath);
-        }
-    }
-    return output;
+function stripHiddenDirectories(filePath:string):string{
+    const segments=filePath.split("/");
+    return segments
+        .map((segment,index)=>{
+            const isDirectory=index<segments.length-1;
+            return isDirectory&&segment.startsWith(".")?segment.slice(1):segment;
+        })
+        .join("/");
 }
 
 export function relativeSearchPath(root:string,filePath:string,isDirectory:boolean):string{

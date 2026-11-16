@@ -2,9 +2,17 @@
 
 Owl 是一个 TypeScript 编码 Agent，提供终端交互、文件读取、编辑与写入、内容搜索、文件查找、Bash 工具、会话恢复和上下文压缩。
 
-内置 `grep` 和 `find` 分别用于内容搜索和 glob 文件查找；在 Git 仓库中会遵守 `.gitignore`，结果受数量和字节上限约束。
+内置 `grep` 和 `find` 通过 ripgrep 的结构化参数执行，遵守 `.gitignore`、`.ignore` 等 ripgrep 忽略规则；`grep` 使用流式 JSON 输出并限制匹配数、字节数和 context，`find` 使用 `rg --files` 获取实际存在的文件。结果受数量和字节上限约束。
 
-运行需要 Node.js 22.19 或更新版本、npm 和 Bash。在 Owl 目录安装依赖：
+运行需要 Node.js 22.19 或更新版本、npm、Bash 和 `rg`。macOS 可安装 ripgrep：
+
+```bash
+brew install ripgrep
+```
+
+Debian/Ubuntu 使用 `apt install ripgrep`。如果 `rg` 不在 PATH 中，`grep` 和 `find` 会返回明确的安装提示，不会静默回退到语义不同的 JavaScript 搜索。也可以用 `OWL_RG_PATH` 指定 ripgrep 可执行文件路径。
+
+在 Owl 目录安装依赖：
 
 ```bash
 npm ci
