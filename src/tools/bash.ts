@@ -12,10 +12,10 @@ interface BashInput{
     readonly timeout?:number;
 }
 
-function formatOutput(snapshot:OutputSnapShot):string{
-    let text=snapshot.content||"(no output)";
+function formatOutput(snapshot:OutputSnapShot,emptyText="(no output)"):string{
+    let text=snapshot.content||emptyText;
     if(snapshot.truncation.truncated){
-        text+=`\n\n[Output truncated. Full captured output: ${snapshot.fullOutputPath}]`;
+        text+=`\n\n[Output truncated. Full captured output: ${snapshot.fullOutputPath??"(unavailable)"}]`;
     }
     return text;
 }
@@ -55,7 +55,7 @@ export const BashTool:AgentTool={
             if(onUpdate!==undefined&&now-lastUpdateAt>=UPDATE_INTERVAL_MS){
                 lastUpdateAt=now;
                 const snapshot=outputCollector.snapshot();
-                onUpdate({content:[{type:"text",text:snapshot.content}]});
+                onUpdate({content:[{type:"text",text:formatOutput(snapshot,"")}]});
             }
         };
 
@@ -104,7 +104,7 @@ export const BashTool:AgentTool={
             await outputCollector.closeTempFile();
             if(onUpdate!==undefined&&!context.signal.aborted){
                 const snapshot=outputCollector.snapshot();
-                onUpdate({content:[{type:"text",text:snapshot.content}]});
+                onUpdate({content:[{type:"text",text:formatOutput(snapshot,"")}]});
             }
         }
     }
