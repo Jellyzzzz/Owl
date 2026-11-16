@@ -94,6 +94,14 @@ export class ToolRegistry{
     ){
         throw new Error("Tool arguments must be a JSON object");
     }
+    const prepared:unknown=tool.prepareArguments?tool.prepareArguments(args):args;
+    if(
+        typeof prepared!=="object"||
+        prepared===null||
+        Array.isArray(prepared)
+    ){
+        throw new Error("Tool arguments must be a JSON object");
+    }
     const piTool=toPiTools([tool.definition])[0];
     if(piTool===undefined){
         throw new Error(`Missing tool definition: ${call.name}`);
@@ -104,7 +112,7 @@ export class ToolRegistry{
             type:"toolCall",
             id:call.callId,
             name:call.name,
-            arguments:args as PiJsonObject,
+            arguments:prepared as PiJsonObject,
         },
     )
     return validated;

@@ -14,6 +14,7 @@ export interface TruncatedResult{
     maxLines:number;
     maxBytes:number;
 }
+export type TruncationResult=TruncatedResult;
 export interface TruncatedOptions{
     maxLines?:number;
     maxBytes?:number;
@@ -27,6 +28,87 @@ function splitLinesForCounting(content:string):string[]{
         lines.pop();
     }
     return lines;
+}
+export function formatSize(bytes:number):string{
+    if(bytes<1024){
+        return `${bytes}B`;
+    }
+    if(bytes<1024*1024){
+        return `${(bytes/1024).toFixed(1)}KB`;
+    }
+    return `${(bytes/(1024*1024)).toFixed(1)}MB`;
+}
+export function truncateHead(content:string,options:TruncatedOptions={}):TruncatedResult{
+    const maxLines=options.maxLines??DEFAULT_MAX_LINES;
+    const maxBytes=options.maxBytes??DEFAULT_MAX_BYTES;
+
+    const totalBytes=Buffer.byteLength(content,"utf-8");
+    const lines=splitLinesForCounting(content);
+    const totalLines=lines.length;
+
+    if(totalLines<=maxLines&&totalBytes<=maxBytes){
+        return {
+            content:content,
+            truncated:false,
+            truncatedBy:null,
+            totalLines:totalLines,
+            totalBytes:totalBytes,
+            outputLines:totalLines,
+            outputBytes:totalBytes,
+            lastLinePartial:false,
+            firstLineExceedsLimit:false,
+            maxLines:maxLines,
+            maxBytes:maxBytes,
+        };
+    }
+
+    const firstLineBytes=Buffer.byteLength(lines[0]??"","utf-8");
+    if(firstLineBytes>maxBytes){
+        return {
+            content:"",
+            truncated:true,
+            truncatedBy:"bytes",
+            totalLines:totalLines,
+            totalBytes:totalBytes,
+            outputLines:0,
+            outputBytes:0,
+            lastLinePartial:false,
+            firstLineExceedsLimit:true,
+            maxLines:maxLines,
+            maxBytes:maxBytes,
+        };
+    }
+
+    const outputLinesArr:string[]=[];
+    let outputBytesCount=0;
+    let truncatedBy:"lines"|"bytes"="lines";
+    for(let i=0;i<lines.length&&i<maxLines;i++){
+        const line=lines[i];
+        const lineBytes=Buffer.byteLength(line,"utf-8")+(i>0?1:0);
+        if(outputBytesCount+lineBytes>maxBytes){
+            truncatedBy="bytes";
+            break;
+        }
+        outputLinesArr.push(line);
+        outputBytesCount+=lineBytes;
+    }
+    if(outputLinesArr.length>=maxLines&&outputBytesCount<=maxBytes){
+        truncatedBy="lines";
+    }
+    const outputContent=outputLinesArr.join("\n");
+    return {
+        content:outputContent,
+        truncated:true,
+        truncatedBy:truncatedBy,
+        totalLines:totalLines,
+        totalBytes:totalBytes,
+        outputLines:outputLinesArr.length,
+        outputBytes:Buffer.byteLength(outputContent,"utf-8"),
+        lastLinePartial:false,
+        firstLineExceedsLimit:false,
+        maxLines:maxLines,
+        maxBytes:maxBytes,
+    };
 }
 function truncateStringToBytesFromEnd(totalText:string,maxBytes:number):string{
     const buffer=Buffer.from(totalText,"utf-8");

@@ -270,7 +270,7 @@ export class OwlTui {
                 this.contextTokens = event.estimatedTokensBefore;
                 this.compactionNote = new NoteView(
                     event.reason === "overflow" ? "模型报告上下文溢出，正在压缩…"
-                        : event.reason === "manual" ? "正在手动压缩上下文…" : "正在压缩上下文…",
+                        : event.reason === "manual" ? "正在压缩上下文…" : "正在自动压缩上下文…",
                     "info",
                 );
                 this.transcript.addChild(this.compactionNote);

@@ -13,7 +13,8 @@
     "owl": "node --env-file-if-exists=.env.local --import tsx src/cli.ts",
     "owl:text": "node --env-file-if-exists=.env.local --import tsx src/cli.ts --no-tui",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test 'src/**/*.test.ts'"
+    "test": "node --import tsx --test 'src/**/*.test.ts'",
+    "token:report": "node --import tsx scripts/token-report.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
@@ -22,6 +23,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^1.1.0",
-    "@earendil-works/pi-tui": "^1.5.2"
+    "@earendil-works/pi-tui": "^1.5.2",
+    "diff": "8.0.4"
   }
 }

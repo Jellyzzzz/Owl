@@ -13,6 +13,8 @@ export type ToolUpdateCallback=(partial:ToolResult)=>void;
 export interface AgentTool{
     readonly definition:ToolDefinition;
     readonly mode?:ToolExecutionMode;
+    /** Normalize raw tool-call arguments before schema validation. */
+    prepareArguments?(args:unknown):unknown;
     execute(args:unknown,context:ToolContext,onUpdate?:ToolUpdateCallback):Promise<ToolResult>;
 }
 export type ToolExecutionMode="sequential"|"parallel";

@@ -9,6 +9,9 @@ import {deepseekProvider}from "@earendil-works/pi-ai/providers/deepseek";
 import {PiGateway}from "./model/pi-gateway.js";
 import type{Message}from "./model/types.js";
 import {ToolRegistry} from "./tools/registry.js";
+import {ReadTool} from "./tools/read.js";
+import {EditTool} from "./tools/edit.js";
+import {WriteTool} from "./tools/write.js";
 import {BashTool} from "./tools/bash.js";
 import {AgentLoop} from "./agent/loop.js";
 import {AgentSession} from "./agent/session.js";
@@ -17,6 +20,7 @@ import {
     loadSessionLog,restoreContextUsageAnchor,type LoadedSession,
 } from "./agent/session-log.js";
 import {createUsageTotals} from "./agent/usage.js";
+import {buildSystemPrompt} from "./agent/system-prompt.js";
 import type{AgentEvent,LoopOptions} from "./agent/types.js";
 import {OwlTui} from "./tui/app.js";
 import {formatTokens} from "./tui/transcript.js";
@@ -176,6 +180,9 @@ async function main():Promise<void>{
     // 将已装配的模型入口交给 Gateway
     const gateway=new PiGateway(models);
     const registry=new ToolRegistry();
+    registry.register(ReadTool);
+    registry.register(EditTool);
+    registry.register(WriteTool);
     registry.register(parallelTools?{
         ...BashTool,
         mode:"parallel",
@@ -264,16 +271,11 @@ async function main():Promise<void>{
         thinkingJson:thinkingMode==="enabled"
             ?JSON.stringify({reasoning:"high"})
             :"{}",
-        systemPrompt:[
-            "You are Owl, a coding agent working in the user's repository.",
-            `Working directory: ${cwd}`,
-            "Use the available tools to inspect, edit, and verify code as needed.",
-            "Distinguish checks that passed, failed, and were not run.",
-            ].join("\n"),
+        systemPrompt:buildSystemPrompt(cwd),
         maxOutputTokens,
         reserveTokens:compactAt===undefined?16384:model.contextWindow-compactAt,
         contextWindow:model.contextWindow,
-        maxModelCalls:50,
+        maxModelCalls:100,
         maxConcurrentTools:5,
         ToolExecutionMode:parallelTools?"parallel":"sequential",
     };
