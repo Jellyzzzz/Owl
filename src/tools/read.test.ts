@@ -208,6 +208,28 @@ test("read: omits BMP images that cannot be converted inline",async()=>{
     assert.ok(result.content.every(block=>block.type==="text"));
 });
 
+test("read: an explicit limit is honored beyond the default line cap",async()=>{
+    const file=join(testDir,"many-short-lines.txt");
+    const totalLines=DEFAULT_MAX_LINES+800;
+    const lines=Array.from({length:totalLines},(_,index)=>`${index+1}`);
+    await writeFile(file,lines.join("\n"));
+
+    const output=text(await read({path:file,limit:totalLines}));
+    assert.equal(output,lines.join("\n"));
+    assert.ok(!output.includes("Use offset="));
+    assert.ok(!output.includes("limit)"));
+});
+
+test("read: rejects fractional and out-of-range parameters",async()=>{
+    const file=join(testDir,"params.txt");
+    await writeFile(file,"Line 1\nLine 2");
+
+    await assert.rejects(read({path:file,offset:0}),/offset must be an integer/);
+    await assert.rejects(read({path:file,offset:1.5}),/offset must be an integer/);
+    await assert.rejects(read({path:file,limit:0}),/limit must be an integer/);
+    await assert.rejects(read({path:file,limit:1.5}),/limit must be an integer/);
+});
+
 test("read: cancellation before execution propagates the abort reason",async()=>{
     const controller=new AbortController();
     const reason=new Error("User cancelled");
@@ -220,10 +242,14 @@ test("read: cancellation before execution propagates the abort reason",async()=>
 
 test("read: exposes a strict path schema",()=>{
     const parameters=JSON.parse(ReadTool.definition.parametersJson) as {
-        properties?:Record<string,unknown>;
+        properties?:Record<string,{type?:string;minimum?:number;maximum?:number}>;
         required?:string[];
     };
     assert.equal(ReadTool.definition.name,"read");
     assert.deepEqual(Object.keys(parameters.properties??{}),["path","offset","limit"]);
     assert.deepEqual(parameters.required,["path"]);
+    assert.equal(parameters.properties?.offset?.type,"integer");
+    assert.equal(parameters.properties?.offset?.minimum,1);
+    assert.equal(parameters.properties?.limit?.type,"integer");
+    assert.equal(parameters.properties?.limit?.minimum,1);
 });
